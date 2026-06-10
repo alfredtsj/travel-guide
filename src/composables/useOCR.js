@@ -71,7 +71,7 @@ export function mergeOcrResults(ocrTexts) {
   return [...allLines].sort().join('\n')
 }
 
-// ========== 核心：纯本地 OCR，零 CDN 依赖 ==========
+// ========== 核心 OCR ==========
 
 export function useOCR() {
   const isRecognizing = ref(false)
@@ -81,46 +81,63 @@ export function useOCR() {
   const ocrHistory = ref([])
 
   let _worker = null
+  let _initPromise = null
 
   async function getWorker() {
     if (_worker) return _worker
+    if (_initPromise) return _initPromise
 
     ocrStatus.value = '正在加载 OCR 引擎...'
     ocrProgress.value = 5
 
-    // 动态导入 tesseract.js（浏览器端 import）
-    const Tesseract = await import('tesseract.js')
+    _initPromise = (async () => {
+      // Step 1: 动态导入 tesseract.js
+      console.log('[OCR] 动态导入 tesseract.js...')
+      ocrProgress.value = 8
+      const Tesseract = await import('tesseract.js')
+      console.log('[OCR] tesseract.js 导入成功')
 
-    ocrProgress.value = 10
-    ocrStatus.value = '正在加载中文语言包（首次约需下载 44MB）...'
+      ocrProgress.value = 10
+      ocrStatus.value = '正在加载中文语言包（约44MB）...'
 
-    // 使用本地 traineddata 文件，完全不依赖外部 CDN
-    // traineddata 位于 public/traineddata/chi_sim.traineddata
-    // 构网后由 Vite 复制到 dist/traineddata/chi_sim.traineddata
-    const worker = await Tesseract.createWorker('chi_sim', 1, {
-      langPath: window.location.origin
-        ? window.location.origin + '/traineddata/'
-        : '/traineddata/',
-      logger: (m) => {
-        if (m.status === 'loading language traineddata') {
-          ocrProgress.value = 10 + Math.round(m.progress * 20)
-          ocrStatus.value = '加载语言包... ' + Math.round(m.progress * 100) + '%'
-        } else if (m.status === 'initializing tesseract') {
-          ocrProgress.value = 30
-          ocrStatus.value = '初始化引擎...'
-        } else if (m.status === 'initialized tesseract') {
-          ocrProgress.value = 45
-          ocrStatus.value = '引擎就绪'
-        } else if (m.status === 'recognizing text') {
-          ocrProgress.value = 50 + Math.round(m.progress * 45)
-          ocrStatus.value = '识别文字中... ' + Math.round(m.progress * 100) + '%'
-        }
+      // Step 2: 确定 traineddata 路径
+      // 兼容本地 file:// 协议和 HTTPS 部署
+      let langPath = '/traineddata/'
+      if (window.location.protocol === 'file:') {
+        // file:// 协议下用相对路径
+        langPath = './traineddata/'
       }
-    })
 
-    ocrProgress.value = 50
-    _worker = worker
-    return worker
+      console.log('[OCR] 语言包路径:', langPath)
+
+      // Step 3: 创建 worker
+      const worker = await Tesseract.createWorker('chi_sim', 1, {
+        langPath: langPath,
+        logger: (m) => {
+          console.log('[OCR]', m.status, m.progress || '')
+          if (m.status === 'loading language traineddata') {
+            ocrProgress.value = 10 + Math.round(m.progress * 25)
+            ocrStatus.value = '加载语言包... ' + Math.round(m.progress * 100) + '%'
+          } else if (m.status === 'initializing tesseract') {
+            ocrProgress.value = 35
+            ocrStatus.value = '初始化引擎...'
+          } else if (m.status === 'initialized tesseract') {
+            ocrProgress.value = 50
+            ocrStatus.value = '引擎就绪'
+          } else if (m.status === 'recognizing text') {
+            ocrProgress.value = 55 + Math.round(m.progress * 40)
+            ocrStatus.value = '识别文字中... ' + Math.round(m.progress * 100) + '%'
+          }
+        }
+      })
+
+      console.log('[OCR] Worker 创建成功')
+      ocrProgress.value = 50
+      _worker = worker
+      return worker
+    })()
+
+    return _initPromise
   }
 
   async function recognizeImage(file) {
@@ -128,18 +145,23 @@ export function useOCR() {
     ocrProgress.value = 0
     ocrStatus.value = '正在预处理图片...'
 
+    console.log('[OCR] 开始处理图片:', file.name, file.size)
+
     try {
-      // 预处理图片（缩放、增强对比度）
+      // 预处理图片
       const imgData = await preprocessImage(file)
       ocrProgress.value = 8
       ocrStatus.value = '图片处理完成，加载引擎...'
 
       // 获取 worker（首次会加载语言包）
+      console.log('[OCR] 获取 worker...')
       const worker = await getWorker()
 
       // 识别
       ocrStatus.value = '正在识别文字...'
+      console.log('[OCR] 开始识别...')
       const { data } = await worker.recognize(imgData)
+      console.log('[OCR] 识别完成，文字长度:', data.text.length)
 
       ocrProgress.value = 100
       ocrStatus.value = '识别完成！'
@@ -160,13 +182,12 @@ export function useOCR() {
 
       const msg = err.message || String(err)
 
-      // 判断具体错误类型
+      // 详细错误诊断
       if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('404')) {
         throw new Error(
-          '未找到中文语言包文件。\n\n' +
-          '语言包文件 (chi_sim.traineddata, 约44MB) 需要部署后可用。\n' +
-          '请在 Netlify 部署后使用 OCR 功能。\n' +
-          '或手动将 chi_sim.traineddata 放入 dist/traineddata/ 目录。'
+          '语言包加载失败。\n' +
+          '请确保 chi_sim.traineddata 文件（约44MB）已部署。\n' +
+          '本地测试请将文件放入 dist/traineddata/ 目录。'
         )
       }
       if (msg.includes('Cannot read properties')) {
