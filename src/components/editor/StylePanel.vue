@@ -110,6 +110,22 @@
       </div>
     </div>
 
+    <!-- 卡片风格 -->
+    <div class="card">
+      <h3 class="font-bold text-sm text-[#555] mb-3">🃏 卡片风格</h3>
+      <div class="grid grid-cols-3 gap-2">
+        <button v-for="c in cardStyles" :key="c.value"
+          class="py-2.5 rounded-lg text-xs text-center transition-all border"
+          :class="editor.customStyle.cardStyle === c.value
+            ? 'border-[#e8734a] bg-[#e8734a]/10 text-[#e8734a] font-bold'
+            : 'border-[#eae5df] text-[#888] hover:border-[#e8734a]/30'"
+          @click="editor.customStyle.cardStyle = c.value">
+          <div class="text-lg mb-0.5">{{ c.icon }}</div>
+          <div>{{ c.label }}</div>
+        </button>
+      </div>
+    </div>
+
     <!-- 细节自定义 -->
     <div class="card">
       <h3 class="font-bold text-sm text-[#555] mb-3">🔧 细节设置</h3>
@@ -222,6 +238,14 @@ const densityOptions = [
   { value: 'compact', label: '紧凑' },
   { value: 'normal', label: '适中' },
   { value: 'loose', label: '宽松' }
+]
+
+const cardStyles = [
+  { value: 'rounded', label: '圆角白卡', icon: '📇' },
+  { value: 'shadow', label: '投影卡片', icon: '🪪' },
+  { value: 'bordered', label: '线框卡片', icon: '📋' },
+  { value: 'flat', label: '扁平素卡', icon: '📄' },
+  { value: 'elevated', label: '悬浮卡片', icon: '✨' }
 ]
 
 function isPresetActive(preset) {

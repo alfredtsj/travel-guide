@@ -1,5 +1,25 @@
 <template>
   <div class="edit-panel-content space-y-4">
+    <!-- 快捷插入符号工具栏 -->
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-medium text-[#888]">✨ 快捷插入符号（点击复制 → 粘贴到文本框）</span>
+        <span class="text-[10px] text-[#bbb] cursor-pointer hover:text-[#e8734a]" @click="showMoreSymbols = !showMoreSymbols">
+          {{ showMoreSymbols ? '收起 ▲' : '更多 ▼' }}
+        </span>
+      </div>
+      <div class="flex flex-wrap gap-1.5">
+        <button v-for="s in quickSymbols" :key="s" class="text-sm px-2 py-1 rounded-lg border border-[#eae5df] bg-[#faf9f6] hover:bg-[#e8734a]/10 hover:border-[#e8734a]/30 transition-all cursor-pointer active:scale-95" @click="copySymbol(s)" :title="'点击复制 ' + s">
+          {{ s }}
+        </button>
+      </div>
+      <div v-if="showMoreSymbols" class="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-[#f0ebe3]">
+        <button v-for="s in moreSymbols" :key="s" class="text-sm px-2 py-1 rounded-lg border border-[#eae5df] bg-[#faf9f6] hover:bg-[#e8734a]/10 hover:border-[#e8734a]/30 transition-all cursor-pointer active:scale-95" @click="copySymbol(s)" :title="'点击复制 ' + s">
+          {{ s }}
+        </button>
+      </div>
+    </div>
+
     <!-- 基础行程信息 -->
     <div v-if="editor.sectionVisibility.basic" class="card">
       <div class="section-title">
@@ -264,9 +284,49 @@
 </template>
 
 <script setup>
+import { ref } from 'vue'
 import { useEditorStore } from '@/stores/editor'
 
 const editor = useEditorStore()
+const showMoreSymbols = ref(false)
+
+// 快捷符号
+const quickSymbols = [
+  '→', '▶', '▸', '✦', '◆', '●', '○', '⭐',
+  '💡', '⚠️', '✅', '🔥', '📍', '💰', '⏰',
+  '🗺️', '📋', '🏞️', '🍜', '🏨', '🎒', '📸'
+]
+
+const moreSymbols = [
+  '➤', '￫', '￫', '¬', '«', '»', '★', '☆',
+  '◇', '⬥', '■', '□', '▣', '▤', '▥', '▦',
+  '♨', '☀', '��', '☂', '♫', '♪', '✈', '🚗',
+  '🚌', '🚲', '🏃', '🎭', '🎪', '📷', '🛍️', '💊',
+  '⌚', '📌', '🔖', '📝', '✨', '💫', '🌟', '🎯'
+]
+
+function copySymbol(symbol) {
+  navigator.clipboard.writeText(symbol).then(() => {
+    // 简单提示
+    const el = document.activeElement
+    if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')) {
+      // 在光标位置插入
+      const start = el.selectionStart
+      const end = el.selectionEnd
+      const text = el.value
+      el.value = text.substring(0, start) + symbol + text.substring(end)
+      el.selectionStart = el.selectionEnd = start + symbol.length
+      el.focus()
+      // 触发 Vue 更新
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    } else {
+      // 否则复制到剪贴板
+      alert('已复制 ' + symbol + ' 到剪贴板')
+    }
+  }).catch(() => {
+    alert('复制失败，请手动复制')
+  })
+}
 
 // 暴露给父组件调用
 defineExpose({})

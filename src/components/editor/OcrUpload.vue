@@ -5,8 +5,16 @@
     </h2>
 
     <p class="text-sm text-[#888] leading-relaxed">
-      上传旅游攻略截图或照片，自动提取文字并智能匹配到对应攻略板块。支持中英文混合识别。
+      上传旅游攻略截图或照片，自动提取文字并智能匹配到对应攻略板块。
+      <span class="text-[#e8734a] font-medium">纯本地识别，不上传服务器。</span>
     </p>
+
+    <!-- 状态提示 -->
+    <div v-if="ocrStatusMsg" class="card" :class="ocrStatusType === 'error' ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'">
+      <div class="text-sm" :class="ocrStatusType === 'error' ? 'text-red-600' : 'text-blue-600'">
+        {{ ocrStatusMsg }}
+      </div>
+    </div>
 
     <!-- 上传区域 -->
     <div
@@ -34,37 +42,37 @@
         </div>
       </div>
       <div class="flex gap-2 mt-3">
-        <button class="btn-primary text-sm" @click="startOCR" :disabled="ocr.isRecognizing">
-          {{ ocr.isRecognizing ? '识别中...' : '🔍 开始识别' }}
+        <button class="btn-primary text-sm" @click="startOCR" :disabled="ocrUtil.isRecognizing">
+          {{ ocrUtil.isRecognizing ? '识别中...' : '🔍 开始识别' }}
         </button>
         <button class="btn-ghost text-sm" @click="clearAll">清空</button>
       </div>
     </div>
 
     <!-- OCR 进度 -->
-    <div v-if="ocr.isRecognizing" class="card">
+    <div v-if="ocrUtil.isRecognizing" class="card">
       <div class="flex items-center gap-3 mb-2">
         <span class="text-2xl animate-bounce">🔬</span>
-        <span class="text-sm text-[#666]">正在识别文字...</span>
+        <span class="text-sm text-[#666]">{{ ocrUtil.ocrStatus || '正在识别...' }}</span>
       </div>
       <div class="w-full bg-[#f0ebe3] rounded-full h-2">
         <div class="h-2 rounded-full bg-[#e8734a] transition-all duration-300"
-          :style="{ width: ocr.ocrProgress + '%' }"></div>
+          :style="{ width: ocrUtil.ocrProgress + '%' }"></div>
       </div>
-      <div class="text-xs text-[#999] mt-1">{{ ocr.ocrProgress }}%</div>
+      <div class="text-xs text-[#999] mt-1">{{ ocrUtil.ocrProgress }}%</div>
     </div>
 
     <!-- 识别结果 -->
-    <div v-if="ocr.ocrText && !ocr.isRecognizing" class="card">
+    <div v-if="ocrUtil.ocrText && !ocrUtil.isRecognizing" class="card">
       <div class="flex items-center justify-between mb-3">
         <h3 class="font-bold text-sm text-[#555]">📝 识别结果</h3>
         <div class="flex gap-2">
           <button class="text-xs text-[#e8734a] hover:underline" @click="applyToForm">📥 填充到表单</button>
-          <button class="text-xs text-[#999] hover:text-red-400" @click="ocr.clearHistory()">🗑️</button>
+          <button class="text-xs text-[#999] hover:text-red-400" @click="ocrUtil.clearHistory()">🗑️</button>
         </div>
       </div>
       <div class="bg-[#faf9f6] rounded-xl p-3 max-h-[300px] overflow-y-auto">
-        <pre class="text-xs text-[#666] whitespace-pre-wrap font-sans leading-relaxed">{{ ocr.ocrText }}</pre>
+        <pre class="text-xs text-[#666] whitespace-pre-wrap font-sans leading-relaxed">{{ ocrUtil.ocrText }}</pre>
       </div>
     </div>
 
@@ -81,10 +89,10 @@
     </div>
 
     <!-- OCR 识别历史 -->
-    <div v-if="ocr.ocrHistory.length > 0" class="card">
+    <div v-if="ocrUtil.ocrHistory.length > 0" class="card">
       <h3 class="font-bold text-sm text-[#555] mb-3">📋 识别记录</h3>
       <div class="space-y-2">
-        <div v-for="(record, idx) in ocr.ocrHistory" :key="idx"
+        <div v-for="(record, idx) in ocrUtil.ocrHistory" :key="idx"
           class="flex items-center justify-between p-2 bg-[#faf9f6] rounded-lg text-xs">
           <div class="flex items-center gap-2">
             <span>{{ record.fileName }}</span>
@@ -100,15 +108,17 @@
 <script setup>
 import { ref } from 'vue'
 import { useEditorStore } from '@/stores/editor'
-import { useOCR } from '@/composables/useOCR'
+import { useOCR, matchToModules, mergeOcrResults } from '@/composables/useOCR'
 
 const editor = useEditorStore()
-const ocr = useOCR()
+const ocrUtil = useOCR()
 
 const fileInput = ref(null)
 const isDragOver = ref(false)
 const previewImages = ref([])
 const matchedModules = ref(null)
+const ocrStatusMsg = ref('')
+const ocrStatusType = ref('info')
 
 function triggerUpload() {
   fileInput.value?.click()
@@ -126,6 +136,7 @@ function handleFileSelect(e) {
 }
 
 function addImages(files) {
+  ocrStatusMsg.value = ''
   for (const file of files) {
     if (file.size > 10 * 1024 * 1024) {
       alert(`图片 ${file.name} 超过 10MB 限制，已跳过`)
@@ -144,24 +155,31 @@ function removeImage(idx) {
 function clearAll() {
   previewImages.value.forEach(img => URL.revokeObjectURL(img.url))
   previewImages.value = []
-  ocr.clearHistory()
+  ocrUtil.clearHistory()
   matchedModules.value = null
+  ocrStatusMsg.value = ''
 }
 
 async function startOCR() {
+  ocrStatusMsg.value = ''
   const allTexts = []
+
   for (const img of previewImages.value) {
     try {
-      const text = await ocr.recognizeImage(img.file)
+      const text = await ocrUtil.recognizeImage(img.file)
       allTexts.push(text)
     } catch (err) {
-      console.error('识别失败:', err)
+      console.error('[OCR] 识别失败:', err)
+      ocrStatusMsg.value = err.message || '识别失败，请重试'
+      ocrStatusType.value = 'error'
+      return
     }
   }
 
   if (allTexts.length > 0) {
-    const merged = ocr.mergeOcrResults(allTexts)
-    matchedModules.value = ocr.matchToModules(merged)
+    const merged = mergeOcrResults(allTexts)
+    matchedModules.value = matchToModules(merged)
+    ocrStatusMsg.value = ''
   }
 }
 
@@ -169,7 +187,6 @@ function applyToForm() {
   if (!matchedModules.value) return
   for (const [module, content] of Object.entries(matchedModules.value)) {
     if (module === 'itinerary') {
-      // 行程特殊处理
       if (content && !editor.guideData.itinerary.some(d => d.spots)) {
         editor.guideData.itinerary = [{
           day: 1, spots: content, duration: '', route: ''
@@ -179,7 +196,6 @@ function applyToForm() {
       editor.guideData[module] = content
     }
   }
-  editor.setOcrResults(ocr.ocrText, matchedModules.value)
   editor.autoSave()
   alert('已填充到对应板块，可在「内容」标签页查看和修改')
 }

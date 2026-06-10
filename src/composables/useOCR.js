@@ -1,4 +1,4 @@
-import { ref, reactive } from 'vue'
+import { ref } from 'vue'
 
 // OCR 智能匹配关键词映射
 const MODULE_KEYWORDS = {
@@ -33,50 +33,37 @@ const MODULE_KEYWORDS = {
   tipsHours: ['营业', '时间', '开门', '关门', '开放时间'],
 }
 
-// 智能匹配：将OCR文本按关键词匹配到对应攻略板块
-function matchToModules(ocrText) {
+export function matchToModules(ocrText) {
   const results = {}
   const lines = ocrText.split(/[\n\r]+/).filter(l => l.trim())
-
   for (const line of lines) {
     const cleanLine = line.trim()
     if (!cleanLine || cleanLine.length < 2) continue
-
     let matched = false
     for (const [module, keywords] of Object.entries(MODULE_KEYWORDS)) {
       for (const kw of keywords) {
         if (cleanLine.includes(kw)) {
           if (!results[module]) results[module] = []
-          if (!results[module].includes(cleanLine)) {
-            results[module].push(cleanLine)
-          }
+          if (!results[module].includes(cleanLine)) results[module].push(cleanLine)
           matched = true
           break
         }
       }
       if (matched) break
     }
-
-    // 未匹配文本存入 customNotes
     if (!matched) {
       if (!results.customNotes) results.customNotes = []
-      if (!results.customNotes.includes(cleanLine)) {
-        results.customNotes.push(cleanLine)
-      }
+      if (!results.customNotes.includes(cleanLine)) results.customNotes.push(cleanLine)
     }
   }
-
-  // 转为拼接文本
   const formatted = {}
   for (const [key, lines] of Object.entries(results)) {
     formatted[key] = lines.join('\n')
   }
-
   return formatted
 }
 
-// 多图去重合并
-function mergeOcrResults(ocrTexts) {
+export function mergeOcrResults(ocrTexts) {
   const allLines = new Set()
   for (const text of ocrTexts) {
     text.split(/[\n\r]+/).filter(l => l.trim()).forEach(l => allLines.add(l.trim()))
@@ -84,63 +71,122 @@ function mergeOcrResults(ocrTexts) {
   return [...allLines].sort().join('\n')
 }
 
+// ========== 核心：纯本地 OCR，零 CDN 依赖 ==========
+
 export function useOCR() {
   const isRecognizing = ref(false)
   const ocrProgress = ref(0)
+  const ocrStatus = ref('')
   const ocrText = ref('')
-  const ocrHistory = ref([]) // 多图识别记录
+  const ocrHistory = ref([])
+
+  let _worker = null
+
+  async function getWorker() {
+    if (_worker) return _worker
+
+    ocrStatus.value = '正在加载 OCR 引擎...'
+    ocrProgress.value = 5
+
+    // 动态导入 tesseract.js（浏览器端 import）
+    const Tesseract = await import('tesseract.js')
+
+    ocrProgress.value = 10
+    ocrStatus.value = '正在加载中文语言包（首次约需下载 44MB）...'
+
+    // 使用本地 traineddata 文件，完全不依赖外部 CDN
+    // traineddata 位于 public/traineddata/chi_sim.traineddata
+    // 构网后由 Vite 复制到 dist/traineddata/chi_sim.traineddata
+    const worker = await Tesseract.createWorker('chi_sim', 1, {
+      langPath: window.location.origin
+        ? window.location.origin + '/traineddata/'
+        : '/traineddata/',
+      logger: (m) => {
+        if (m.status === 'loading language traineddata') {
+          ocrProgress.value = 10 + Math.round(m.progress * 20)
+          ocrStatus.value = '加载语言包... ' + Math.round(m.progress * 100) + '%'
+        } else if (m.status === 'initializing tesseract') {
+          ocrProgress.value = 30
+          ocrStatus.value = '初始化引擎...'
+        } else if (m.status === 'initialized tesseract') {
+          ocrProgress.value = 45
+          ocrStatus.value = '引擎就绪'
+        } else if (m.status === 'recognizing text') {
+          ocrProgress.value = 50 + Math.round(m.progress * 45)
+          ocrStatus.value = '识别文字中... ' + Math.round(m.progress * 100) + '%'
+        }
+      }
+    })
+
+    ocrProgress.value = 50
+    _worker = worker
+    return worker
+  }
 
   async function recognizeImage(file) {
     isRecognizing.value = true
-    ocrProgress.value = 10
+    ocrProgress.value = 0
+    ocrStatus.value = '正在预处理图片...'
 
     try {
-      // 先做图片预处理：调整大小、灰度化以提升识别率
-      const preprocessed = await preprocessImage(file)
-      ocrProgress.value = 30
+      // 预处理图片（缩放、增强对比度）
+      const imgData = await preprocessImage(file)
+      ocrProgress.value = 8
+      ocrStatus.value = '图片处理完成，加载引擎...'
 
-      // 使用 Tesseract.js 进行 OCR（动态加载）
-      const Tesseract = await import('tesseract.js')
-      ocrProgress.value = 40
+      // 获取 worker（首次会加载语言包）
+      const worker = await getWorker()
 
-      const result = await Tesseract.recognize(preprocessed, 'chi_sim+eng', {
-        logger: (m) => {
-          if (m.status === 'recognizing text') {
-            ocrProgress.value = 40 + Math.round(m.progress * 50)
-          }
-        }
-      })
+      // 识别
+      ocrStatus.value = '正在识别文字...'
+      const { data } = await worker.recognize(imgData)
 
-      const text = result.data.text
-      ocrText.value = text
       ocrProgress.value = 100
+      ocrStatus.value = '识别完成！'
+      isRecognizing.value = false
 
-      // 存入识别历史
+      const text = data.text
+      ocrText.value = text
       ocrHistory.value.push({
         fileName: file.name,
         text,
         timestamp: Date.now()
       })
 
-      isRecognizing.value = false
       return text
     } catch (err) {
       isRecognizing.value = false
-      console.error('OCR 识别失败:', err)
-      throw err
+      console.error('[OCR] 识别失败:', err)
+
+      const msg = err.message || String(err)
+
+      // 判断具体错误类型
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('404')) {
+        throw new Error(
+          '未找到中文语言包文件。\n\n' +
+          '语言包文件 (chi_sim.traineddata, 约44MB) 需要部署后可用。\n' +
+          '请在 Netlify 部署后使用 OCR 功能。\n' +
+          '或手动将 chi_sim.traineddata 放入 dist/traineddata/ 目录。'
+        )
+      }
+      if (msg.includes('Cannot read properties')) {
+        throw new Error('图片格式不支持，请使用 JPG/PNG 格式')
+      }
+
+      throw new Error('识别失败：' + msg)
     }
   }
 
   async function preprocessImage(file) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const img = new Image()
       const reader = new FileReader()
-      reader.onload = (e) => {
-        img.src = e.target.result
-      }
+      reader.onload = (e) => { img.src = e.target.result }
+      reader.onerror = () => reject(new Error('图片读取失败'))
+      img.onerror = () => reject(new Error('图片加载失败，请检查格式'))
       img.onload = () => {
         const canvas = document.createElement('canvas')
-        const maxSize = 2000
+        const maxSize = 1600
         let w = img.width
         let h = img.height
         if (w > maxSize || h > maxSize) {
@@ -151,10 +197,9 @@ export function useOCR() {
         canvas.width = w
         canvas.height = h
         const ctx = canvas.getContext('2d')
-        // 灰度化提升对比度
-        ctx.filter = 'contrast(1.2) brightness(1.05)'
+        ctx.filter = 'contrast(1.15) brightness(1.05)'
         ctx.drawImage(img, 0, 0, w, h)
-        canvas.toBlob(blob => resolve(blob), 'image/png')
+        resolve(canvas)
       }
       reader.readAsDataURL(file)
     })
@@ -163,16 +208,16 @@ export function useOCR() {
   function clearHistory() {
     ocrHistory.value = []
     ocrText.value = ''
+    ocrStatus.value = ''
   }
 
   return {
     isRecognizing,
     ocrProgress,
+    ocrStatus,
     ocrText,
     ocrHistory,
     recognizeImage,
-    matchToModules,
-    mergeOcrResults,
     clearHistory
   }
 }

@@ -78,6 +78,7 @@ export const useEditorStore = defineStore('editor', () => {
     showDecor: true,
     showStickers: true,
     showIcons: true,
+    cardStyle: 'rounded',
     customLabel: '',
     watermark: false
   })
@@ -121,6 +122,7 @@ export const useEditorStore = defineStore('editor', () => {
       showDecor: true,
       showStickers: true,
       showIcons: true,
+      cardStyle: 'rounded',
       customLabel: '',
       watermark: false
     })

@@ -64,7 +64,7 @@
     <!-- 导出弹窗 -->
     <Teleport to="body">
       <div v-if="showExport" class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" @click.self="showExport = false">
-        <ExportPanel @close="showExport = false" :posterRef="posterRef" />
+        <ExportPanel @close="showExport = false" />
       </div>
     </Teleport>
   </div>
