@@ -10,9 +10,19 @@
     </p>
 
     <!-- 状态提示 -->
-    <div v-if="ocrStatusMsg" class="card" :class="ocrStatusType === 'error' ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'">
-      <div class="text-sm" :class="ocrStatusType === 'error' ? 'text-red-600' : 'text-blue-600'">
-        {{ ocrStatusMsg }}
+    <div v-if="statusMsg" class="p-3 rounded-xl border" :class="statusBg">
+      <div class="flex items-center gap-2">
+        <span v-if="statusType === 'loading'" class="text-lg animate-spin">⏳</span>
+        <span v-else-if="statusType === 'done'" class="text-lg">✅</span>
+        <span v-else class="text-lg">❌</span>
+        <div class="text-sm font-medium">{{ statusMsg }}</div>
+      </div>
+      <div v-if="ocrUtil.isRecognizing" class="mt-2">
+        <div class="w-full bg-[#f0ebe3] rounded-full h-2">
+          <div class="h-2 rounded-full bg-[#e8734a] transition-all duration-300"
+            :style="{ width: ocrUtil.ocrProgress + '%' }"></div>
+        </div>
+        <div class="text-xs text-[#999] mt-1 text-right">{{ ocrUtil.ocrProgress }}%</div>
       </div>
     </div>
 
@@ -49,19 +59,6 @@
       </div>
     </div>
 
-    <!-- OCR 进度 -->
-    <div v-if="ocrUtil.isRecognizing" class="card">
-      <div class="flex items-center gap-3 mb-2">
-        <span class="text-2xl animate-bounce">🔬</span>
-        <span class="text-sm text-[#666]">{{ ocrUtil.ocrStatus || '正在识别...' }}</span>
-      </div>
-      <div class="w-full bg-[#f0ebe3] rounded-full h-2">
-        <div class="h-2 rounded-full bg-[#e8734a] transition-all duration-300"
-          :style="{ width: ocrUtil.ocrProgress + '%' }"></div>
-      </div>
-      <div class="text-xs text-[#999] mt-1">{{ ocrUtil.ocrProgress }}%</div>
-    </div>
-
     <!-- 识别结果 -->
     <div v-if="ocrUtil.ocrText && !ocrUtil.isRecognizing" class="card">
       <div class="flex items-center justify-between mb-3">
@@ -87,26 +84,11 @@
         </div>
       </div>
     </div>
-
-    <!-- OCR 识别历史 -->
-    <div v-if="ocrUtil.ocrHistory.length > 0" class="card">
-      <h3 class="font-bold text-sm text-[#555] mb-3">📋 识别记录</h3>
-      <div class="space-y-2">
-        <div v-for="(record, idx) in ocrUtil.ocrHistory" :key="idx"
-          class="flex items-center justify-between p-2 bg-[#faf9f6] rounded-lg text-xs">
-          <div class="flex items-center gap-2">
-            <span>{{ record.fileName }}</span>
-            <span class="text-[#aaa]">{{ formatTime(record.timestamp) }}</span>
-          </div>
-          <span class="text-[#999]">{{ record.text.length }} 字</span>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useEditorStore } from '@/stores/editor'
 import { useOCR, matchToModules, mergeOcrResults } from '@/composables/useOCR'
 
@@ -117,8 +99,14 @@ const fileInput = ref(null)
 const isDragOver = ref(false)
 const previewImages = ref([])
 const matchedModules = ref(null)
-const ocrStatusMsg = ref('')
-const ocrStatusType = ref('info')
+const statusMsg = ref('')
+const statusType = ref('info')
+
+const statusBg = computed(() => {
+  if (statusType.value === 'error') return 'bg-red-50 border-red-200'
+  if (statusType.value === 'done') return 'bg-green-50 border-green-200'
+  return 'bg-blue-50 border-blue-200'
+})
 
 function triggerUpload() {
   fileInput.value?.click()
@@ -136,7 +124,8 @@ function handleFileSelect(e) {
 }
 
 function addImages(files) {
-  ocrStatusMsg.value = ''
+  statusMsg.value = ''
+  statusType.value = 'info'
   for (const file of files) {
     if (file.size > 10 * 1024 * 1024) {
       alert(`图片 ${file.name} 超过 10MB 限制，已跳过`)
@@ -145,11 +134,16 @@ function addImages(files) {
     const url = URL.createObjectURL(file)
     previewImages.value.push({ file, url })
   }
+  statusMsg.value = `已选 ${previewImages.value.length} 张图片，点击"开始识别"`
+  statusType.value = 'info'
 }
 
 function removeImage(idx) {
   URL.revokeObjectURL(previewImages.value[idx].url)
   previewImages.value.splice(idx, 1)
+  if (previewImages.value.length === 0) {
+    statusMsg.value = ''
+  }
 }
 
 function clearAll() {
@@ -157,21 +151,27 @@ function clearAll() {
   previewImages.value = []
   ocrUtil.clearHistory()
   matchedModules.value = null
-  ocrStatusMsg.value = ''
+  statusMsg.value = ''
+  statusType.value = 'info'
 }
 
 async function startOCR() {
-  ocrStatusMsg.value = ''
+  statusMsg.value = '正在初始化 OCR 引擎...'
+  statusType.value = 'loading'
   const allTexts = []
 
-  for (const img of previewImages.value) {
+  for (let i = 0; i < previewImages.value.length; i++) {
+    const img = previewImages.value[i]
+    statusMsg.value = `正在识别第 ${i + 1}/${previewImages.value.length} 张图片...`
     try {
+      console.log('[OCR] 开始识别:', img.file.name)
       const text = await ocrUtil.recognizeImage(img.file)
+      console.log('[OCR] 识别完成，文字长度:', text.length)
       allTexts.push(text)
     } catch (err) {
       console.error('[OCR] 识别失败:', err)
-      ocrStatusMsg.value = err.message || '识别失败，请重试'
-      ocrStatusType.value = 'error'
+      statusMsg.value = err.message || '识别失败，请重试'
+      statusType.value = 'error'
       return
     }
   }
@@ -179,7 +179,8 @@ async function startOCR() {
   if (allTexts.length > 0) {
     const merged = mergeOcrResults(allTexts)
     matchedModules.value = matchToModules(merged)
-    ocrStatusMsg.value = ''
+    statusMsg.value = `识别完成！共提取 ${merged.split('\n').filter(l => l.trim()).length} 行文字`
+    statusType.value = 'done'
   }
 }
 
@@ -214,10 +215,5 @@ function moduleLabel(module) {
     tipsHours: '营业时间', customNotes: '自定义备注'
   }
   return labels[module] || module
-}
-
-function formatTime(ts) {
-  const d = new Date(ts)
-  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
 }
 </script>
